@@ -229,8 +229,6 @@ export class ShipSilentlyClient {
     onChange: FlagsUpdateCallback,
     options: { pollingIntervalMs?: number } = {},
   ): () => void {
-    // EventSource doesn't support custom headers — pass apiKey as query param
-    const url = `${this.apiUrl}/v1/stream?apiKey=${encodeURIComponent(this.apiKey)}`;
     const pollingMs = options.pollingIntervalMs ?? 30_000;
 
     let es: EventSource | null = null;
@@ -248,7 +246,7 @@ export class ShipSilentlyClient {
       pollTimer = setInterval(refresh, pollingMs);
     };
 
-    const tryStream = () => {
+    const tryStream = async () => {
       if (typeof EventSource === 'undefined') {
         // Prime the cache, then poll on an interval
         void refresh();
@@ -256,6 +254,21 @@ export class ShipSilentlyClient {
         return;
       }
 
+      // EventSource can't send custom headers, so we can't put the API key on
+      // the connection directly — and it must never go on the URL as a query
+      // string (it would leak into logs, proxy caches and browser history).
+      // Exchange the header-authenticated key for a single-use ticket and put
+      // *that* on the EventSource URL instead.
+      const ticket = await this.fetchStreamTicket();
+      if (closed) return;
+      if (!ticket) {
+        // No ticket (network error, free plan, etc.) — fall back to polling.
+        void refresh();
+        startPolling();
+        return;
+      }
+
+      const url = `${this.apiUrl}/v1/stream?ticket=${encodeURIComponent(ticket)}`;
       es = new EventSource(url);
 
       // Prime the cache as soon as the connection is open so subscribers
@@ -277,13 +290,33 @@ export class ShipSilentlyClient {
       };
     };
 
-    tryStream();
+    void tryStream();
 
     return () => {
       closed = true;
       es?.close();
       if (pollTimer) clearInterval(pollTimer);
     };
+  }
+
+  /**
+   * Exchange the API key (sent in the X-API-Key header) for a single-use,
+   * short-lived stream ticket. Returns null on any failure so the caller can
+   * fall back to polling. The ticket — not the key — goes on the EventSource
+   * URL, keeping the standing secret out of logs and browser history.
+   */
+  private async fetchStreamTicket(): Promise<string | null> {
+    try {
+      const res = await this.fetch(`${this.apiUrl}/v1/stream/ticket`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { ticket?: string };
+      return data.ticket ?? null;
+    } catch {
+      return null;
+    }
   }
 
   // ─── Analytics ──────────────────────────────────────────────────────────────

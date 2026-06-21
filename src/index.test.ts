@@ -117,20 +117,28 @@ describe('ShipSilentlyClient.stream', () => {
     (globalThis as { EventSource?: unknown }).EventSource = originalEventSource;
   });
 
-  it('refreshes the cache and invokes onChange when a flags.updated event arrives', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        flags: { 'flag-a': { flagKey: 'flag-a', value: true, reason: 'default' } },
-      }),
+  // Route the ticket exchange to a stub ticket and everything else to the
+  // flags batch response, mirroring the real ticket → EventSource flow.
+  function mockTicketAnd(flags: Record<string, unknown>) {
+    mockFetch.mockImplementation((url: unknown) => {
+      if (String(url).endsWith('/v1/stream/ticket')) {
+        return Promise.resolve({ ok: true, json: async () => ({ ticket: 'tkt_test', expiresIn: 60 }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ flags }) });
     });
+  }
+
+  it('refreshes the cache and invokes onChange when a flags.updated event arrives', async () => {
+    mockTicketAnd({ 'flag-a': { flagKey: 'flag-a', value: true, reason: 'default' } });
 
     const onChange = vi.fn();
     const unsubscribe = client.stream({ userId: 'u1' }, onChange);
 
-    expect(FakeEventSource.instances.length).toBe(1);
+    // The EventSource is opened only after the async ticket exchange resolves.
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
     const es = FakeEventSource.instances[0]!;
-    expect(es.url).toContain('/v1/stream?apiKey=');
+    expect(es.url).toContain('/v1/stream?ticket=');
+    expect(es.url).not.toContain('apiKey');
 
     // Server signals a flag change with just { envId }
     es.emit('flags.updated', JSON.stringify({ envId: 'env_123' }));
@@ -149,16 +157,12 @@ describe('ShipSilentlyClient.stream', () => {
   });
 
   it('primes the cache on the connected event', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        flags: { 'priming': { flagKey: 'priming', value: 'hello', reason: 'default' } },
-      }),
-    });
+    mockTicketAnd({ 'priming': { flagKey: 'priming', value: 'hello', reason: 'default' } });
 
     const onChange = vi.fn();
     const unsubscribe = client.stream({}, onChange);
 
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
     const es = FakeEventSource.instances[0]!;
     es.emit('connected', JSON.stringify({ connectionId: 'abc' }));
 
@@ -184,6 +188,28 @@ describe('ShipSilentlyClient.stream', () => {
     // Initial prime call
     await vi.waitFor(() => expect(onChange).toHaveBeenCalled());
     expect(client.get('polled', 0)).toBe(7);
+
+    unsubscribe();
+  });
+
+  it('falls back to polling (no EventSource) when the ticket exchange fails', async () => {
+    mockFetch.mockImplementation((url: unknown) => {
+      if (String(url).endsWith('/v1/stream/ticket')) {
+        return Promise.resolve({ ok: false, status: 402 });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ flags: { gated: { flagKey: 'gated', value: 1, reason: 'default' } } }),
+      });
+    });
+
+    const onChange = vi.fn();
+    const unsubscribe = client.stream({}, onChange, { pollingIntervalMs: 10_000 });
+
+    // No ticket → never opens an EventSource, just polls.
+    await vi.waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(FakeEventSource.instances.length).toBe(0);
+    expect(client.get('gated', 0)).toBe(1);
 
     unsubscribe();
   });
