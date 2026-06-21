@@ -387,7 +387,7 @@ function nowMs(): number {
  *
  * @example
  * ```ts
- * import ShipSilently from 'shipsilently';
+ * import ShipSilently from 'shipsilently-js';
  *
  * const client = ShipSilently.init({ apiKey: 'sk_live_...' });
  * const enabled = await client.evaluate('new-checkout', { userId: 'u_123' }, false);

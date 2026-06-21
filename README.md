@@ -1,4 +1,4 @@
-# shipsilently
+# shipsilently-js
 
 Official JavaScript / TypeScript SDK for [ShipSilently](https://shipsilently.com) —
 Cloudflare-native feature flags.
@@ -14,25 +14,25 @@ CommonJS (`require`) — no configuration required.
 ## Install
 
 ```bash
-npm install shipsilently
+npm install shipsilently-js
 # or
-bun add shipsilently
+bun add shipsilently-js
 ```
 
 ## Usage
 
 ```ts
 // ESM / TypeScript
-import { ShipSilentlyClient } from 'shipsilently';
+import { ShipSilentlyClient } from 'shipsilently-js';
 ```
 
 ```js
 // CommonJS
-const { ShipSilentlyClient } = require('shipsilently');
+const { ShipSilentlyClient } = require('shipsilently-js');
 ```
 
 ```ts
-import { ShipSilentlyClient } from 'shipsilently';
+import { ShipSilentlyClient } from 'shipsilently-js';
 
 const client = new ShipSilentlyClient({
   apiKey: process.env.SHIPSILENTLY_API_KEY!,
